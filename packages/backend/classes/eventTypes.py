@@ -15,13 +15,13 @@ class Event:
     self.allowedTags = allowedTags
     self.tags = tags
 
-class FrequencyRules:
+class FrequencyRule:
   def __init__(self, uuid: UUID, unit: str, rate: float) -> None:
     self.uuid = uuid
     self.unit = unit
     self.rate = rate
 
-class ConditionRules:
+class ConditionRule:
   def __init__(self, uuid: UUID, reference: str, referenceFactor: float, unit: str, unitFactor: float, number: int) -> None:
     self.uuid = uuid
     self.reference = reference
