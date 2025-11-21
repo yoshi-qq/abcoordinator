@@ -1,5 +1,7 @@
 from uuid import UUID
 
+from packages.backend.classes.timeUnits import TimeUnit
+
 
 class Event:
   def __init__(self, uuid: UUID, name: str, startDate: int, duration: int, frequencyRuleId: UUID, conditionRuleId: UUID, timeRemaining: int, iterationsRemaining: int, deadline: int, allowedTags: str, tags: str) -> None:
@@ -16,16 +18,16 @@ class Event:
     self.tags = tags
 
 class FrequencyRule:
-  def __init__(self, uuid: UUID, unit: str, rate: float) -> None:
-    self.uuid = uuid
-    self.unit = unit
-    self.rate = rate
+  def __init__(self, uuid: UUID, unit: TimeUnit, rate: float) -> None:
+    self.uuid: UUID = uuid
+    self.unit: TimeUnit = unit
+    self.rate: float = rate
 
 class ConditionRule:
-  def __init__(self, uuid: UUID, reference: str, referenceFactor: float, unit: str, unitFactor: float, number: int) -> None:
-    self.uuid = uuid
-    self.reference = reference
-    self.referenceFactor = referenceFactor
-    self.unit = unit
-    self.unitFactor = unitFactor
-    self.number = number
+  def __init__(self, uuid: UUID, reference: str, referenceFactor: float, unit: TimeUnit, unitFactor: float, number: int) -> None:
+    self.uuid: UUID = uuid
+    self.reference: str = reference
+    self.referenceFactor: float = referenceFactor
+    self.unit: TimeUnit = unit
+    self.unitFactor: float = unitFactor
+    self.number: int = number
