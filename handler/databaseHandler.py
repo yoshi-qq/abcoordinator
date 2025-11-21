@@ -14,7 +14,7 @@ class CalendarDatabase:
                 deadline INTEGER,
                 allowesTags TEXT,
                 tags TEXT,
-        
+
                 FOREIGN KEY(frequencyRuleId) REFERENCES frequencyRules(id),
                 FOREIGN KEY(conditionRuleId) REFERENCES conditionRules(id)
             );""",
@@ -34,8 +34,8 @@ class CalendarDatabase:
                 number INTEGER
             );"""
     ]
-        
-    
+
+
     def __init__(self) -> None:
         with sqlite3.connect("abcDatabase.db") as database:
             cursor = database.cursor()
