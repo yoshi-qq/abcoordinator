@@ -4,7 +4,7 @@ type Props = {}
 
 const Calendar = (props: Props) => {
   return (
-    <div>TopBar</div>
+    <div></div>
   )
 }
 
