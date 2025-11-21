@@ -1,5 +1,5 @@
 import React from "react";
-
+import "./CalendarView.css"
 interface Event {
   id: number;
   title: string;
@@ -9,12 +9,13 @@ interface Event {
   color?: string;
 }
 
-type CalendarView = "day" | "week" | "month";
+export type CalendarViewType = "day" | "week" | "month";
 
 interface Props {
   events?: Event[];
 }
 
+// Only week view
 export const CalendarView: React.FC<Props> = ({ events = [] }) => {
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const hours = Array.from({ length: 24 }, (_, i) => i);

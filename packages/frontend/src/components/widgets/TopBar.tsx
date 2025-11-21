@@ -1,16 +1,19 @@
 import React from 'react'
-import type { CalendarView } from './CalendarView';
+import type { CalendarViewType } from './CalendarView';
 
 type Props = {
     title: string;
     onPrev: () => void;
     onNext: () => void;
     onToday: () => void;
-    view: CalendarView;
+    view: CalendarViewType;
 };
 
-export const TopBar = (props: Props) => {
+export const TopBar: React.FC<Props>  = (props: Props) => {
   return (
-    <div>TopBar</div>
+    <div className='top-bar'>
+        <div className='title'>
+        </div>
+    </div>
   );
 };
