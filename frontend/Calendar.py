@@ -1,11 +1,34 @@
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timedelta
-from config.constants import WINDOW_HEIGHT, WINDOW_WIDTH, BTN_BG_PRIMARY, BTN_BG_TODAY, BTN_BG_CREATE, DAY_LABEL_BG_EVEN, DAY_LABEL_BG_ODD
+from datetime import datetime, timedelta, timezone
+import pickle
+import os
+from config.constants import WINDOW_HEIGHT, WINDOW_WIDTH, BTN_BG_PRIMARY, BTN_BG_TODAY, BTN_BG_CREATE, DAY_LABEL_BG_EVEN, DAY_LABEL_BG_ODD, DataPaths
 try:
     from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QInputDialog, QMessageBox, QScrollArea, QSizePolicy  # type: ignore[import]
     from PyQt5.QtCore import QTimer, Qt  # type: ignore[import]
 except Exception as exc:
     raise ImportError("PyQt5 is required. Install it with: python -m pip install --user PyQt5") from exc
+
+try:
+    from handler.planningHandler import PlanningHandler, ScheduledEvent
+except ImportError:
+    PlanningHandler = None  # type: ignore[misc,assignment]
+    ScheduledEvent = None  # type: ignore[misc,assignment]
+
+# UTC+1 timezone
+UTC_PLUS_1 = timezone(timedelta(hours=1))
+
+def _get_now_utc1() -> datetime:
+    """Get current time in UTC+1 timezone."""
+    # Get UTC time and convert to UTC+1
+    utc_now = datetime.now(timezone.utc)
+    utc1_now = utc_now.astimezone(UTC_PLUS_1)
+    # Return as naive datetime for consistency with rest of code
+    return utc1_now.replace(tzinfo=None)
+
+def _get_today_utc1() -> datetime:
+    """Get today's date in UTC+1 timezone."""
+    return _get_now_utc1().replace(hour=0, minute=0, second=0, microsecond=0)
 
 def _get_monday(date: datetime) -> datetime:
     return date - timedelta(days=date.weekday())
@@ -24,15 +47,20 @@ class EventLabel(QLabel):
             pass
 
 class CalendarApp:
-    def __init__(self) -> None:
+    def __init__(self, planning_handler: Optional[Any] = None) -> None:
         self.app: Any = QApplication.instance()
         if self.app is None:
             self.app = QApplication([])
         self.window: Any = QWidget()
         self.window.setWindowTitle("ABCoordinator")
         self.window.resize(WINDOW_WIDTH, WINDOW_HEIGHT + 200)
-        self.current_monday: datetime = _get_monday(datetime.today())
+        
+        # Install resize event handler
+        self.window.resizeEvent = self._on_window_resize
+        
+        self.current_monday: datetime = _get_monday(_get_today_utc1())
         self.events: Dict[str, List[Dict[str, Any]]] = {}
+        self.planning_handler: Optional[Any] = planning_handler
         root_layout: Any = QVBoxLayout(self.window)
         top_bar: Any = QHBoxLayout()
         root_layout.addLayout(top_bar)
@@ -61,20 +89,27 @@ class CalendarApp:
         self.HOUR_HEIGHT = HOUR_HEIGHT
         self.ALLDAY_AREA_HEIGHT = ALLDAY_AREA_HEIGHT
         time_widget: Any = QWidget()
-        time_widget.setFixedWidth(92)
+        time_widget.setMinimumWidth(92)
+        time_widget.setMaximumWidth(92)
         self.time_widget = time_widget
         time_layout: Any = QVBoxLayout(time_widget)
         time_layout.setSpacing(6)
         time_layout.setContentsMargins(4, 4, 4, 4)
         spacer_top: Any = QWidget()
-        spacer_top.setFixedHeight(ALLDAY_AREA_HEIGHT)
+        spacer_top.setMinimumHeight(ALLDAY_AREA_HEIGHT)
+        spacer_top.setMaximumHeight(ALLDAY_AREA_HEIGHT)
         self._time_spacer = spacer_top
         time_layout.addWidget(spacer_top)
+        # Display hours in UTC+1 (shift by 1 hour)
         for h in range(24):
-            tl = QLabel(f"{h:02d}:00")
+            # Convert UTC hour to UTC+1 hour
+            utc1_hour = (h + 1) % 24
+            tl = QLabel(f"{utc1_hour:02d}:00")
             tl.setStyleSheet("color:#555; padding:6px; font-family:monospace;")
             tl.setMinimumHeight(self.HOUR_HEIGHT)
+            tl.setMaximumHeight(self.HOUR_HEIGHT)
             time_layout.addWidget(tl)
+        time_layout.addStretch(0)
 
         week_widget: Any = QWidget()
         week_layout: Any = QHBoxLayout(week_widget)
@@ -91,7 +126,8 @@ class CalendarApp:
             top_container: Any = QWidget()
             top_container_layout: Any = QVBoxLayout(top_container)
             top_container_layout.setContentsMargins(0, 0, 0, 0)
-            top_container.setFixedHeight(ALLDAY_AREA_HEIGHT)
+            top_container.setMinimumHeight(ALLDAY_AREA_HEIGHT)
+            top_container.setMaximumHeight(ALLDAY_AREA_HEIGHT)
             top_container_layout.addStretch(0)
             dl.addWidget(top_container)
             timed_container: Any = QWidget()
@@ -99,7 +135,8 @@ class CalendarApp:
             timed_layout.setContentsMargins(0, 0, 0, 0)
             timed_layout.setSpacing(6)
             timeline_widget: Any = QWidget()
-            timeline_widget.setFixedHeight(self.HOUR_HEIGHT * 24)
+            timeline_widget.setMinimumHeight(self.HOUR_HEIGHT * 24)
+            timeline_widget.setMaximumHeight(self.HOUR_HEIGHT * 24)
             timed_layout.addWidget(timeline_widget)
             dl.addWidget(timed_container)
             dw.setStyleSheet(f'background:{DAY_LABEL_BG_EVEN if i%2==0 else DAY_LABEL_BG_ODD}; border-radius:8px; padding:6px;')
@@ -111,9 +148,9 @@ class CalendarApp:
             self.day_timeline_widgets.append(timeline_widget)
             line_widget = QWidget(timeline_widget)
             line_widget.setObjectName('current_line')
-            line_widget.setStyleSheet('background: rgba(220,20,60,0.25);')
-            line_widget.setFixedHeight(1)
-            line_widget.show()
+            line_widget.setStyleSheet('background: #E53935; border: none;')
+            line_widget.setFixedHeight(2)
+            line_widget.hide()  # Initially hidden, will show only for today
             self.day_current_lines.append(line_widget)
 
         content_widget: Any = QWidget()
@@ -139,15 +176,30 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
             pass
         self.update_week()
         self._left_time_line = QWidget(self.time_widget)
-        self._left_time_line.setStyleSheet('background: rgba(220,20,60,0.25);')
-        self._left_time_line.setFixedHeight(1)
-        self._left_time_line.show()
+        self._left_time_line.setStyleSheet('background: #E53935; border: none;')
+        self._left_time_line.setFixedHeight(2)
+        self._left_time_line.hide()  # Initially hidden
         self._timer = QTimer()
         self._timer.timeout.connect(self._update_current_lines)
         self._timer.start(60 * 1000)
         QTimer.singleShot(0, self._update_current_lines)
+        
+        # Load events from planning handler if provided
+        if self.planning_handler is not None:
+            self._load_events_from_handler()
+        
+        # Load saved calendar state (user-created events)
+        self._load_calendar_state()
+
+    def _on_window_resize(self, event: Any) -> None:
+        """Handle window resize events."""
+        # Call default resize behavior
+        QWidget.resizeEvent(self.window, event)
+        # Update event widget positions
+        QTimer.singleShot(0, self._relayout_event_widgets)
 
     def _relayout_event_widgets(self) -> None:
+        """Reposition event widgets when timeline width changes."""
         for tl in self.day_timeline_widgets:
             w = tl.width()
             for child in tl.findChildren(QLabel):
@@ -157,6 +209,66 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                 except Exception:
                     pass
 
+    def _load_events_from_handler(self) -> None:
+        """Load scheduled events from the planning handler into the calendar."""
+        if self.planning_handler is None:
+            return
+        
+        for date_key, scheduled_events in self.planning_handler.scheduledDays.items():
+            date_str = date_key.strftime("%Y-%m-%d")
+            for scheduled in scheduled_events:
+                event = scheduled.event
+                # Convert scheduled time to UTC+1 if needed
+                scheduled_time = scheduled.scheduledTime
+                end_time = scheduled.endTime
+                
+                # If the times don't have timezone info, they might be in UTC
+                # Convert them to UTC+1 by adding 1 hour
+                if scheduled_time.tzinfo is None:
+                    # Check if we need to adjust - compare with current UTC+1 time
+                    # If the scheduled time seems to be in UTC, add 1 hour
+                    scheduled_time = scheduled_time + timedelta(hours=1)
+                    end_time = end_time + timedelta(hours=1)
+                
+                start_time_str = scheduled_time.strftime("%H:%M")
+                end_time_str = end_time.strftime("%H:%M")
+                
+                ev_dict: Dict[str, Any] = {
+                    'name': event.name,
+                    'time': start_time_str,
+                    'end_time': end_time_str,
+                    'all_day': False
+                }
+                
+                self.events.setdefault(date_str, []).append(ev_dict)
+    
+    def _load_calendar_state(self) -> None:
+        """Load saved calendar state from pickle file."""
+        try:
+            if os.path.exists(DataPaths.CALENDAR_STATE.value):
+                with open(DataPaths.CALENDAR_STATE.value, 'rb') as f:
+                    saved_events = pickle.load(f)
+                    # Merge saved events with existing events
+                    for date_str, event_list in saved_events.items():
+                        if date_str not in self.events:
+                            self.events[date_str] = event_list
+                        else:
+                            # Add saved events that aren't already in the list
+                            for saved_ev in event_list:
+                                if saved_ev not in self.events[date_str]:
+                                    self.events[date_str].append(saved_ev)
+        except Exception as e:
+            print(f"Warning: Could not load calendar state: {e}")
+    
+    def _save_calendar_state(self) -> None:
+        """Save current calendar state to pickle file."""
+        try:
+            os.makedirs(os.path.dirname(DataPaths.CALENDAR_STATE.value), exist_ok=True)
+            with open(DataPaths.CALENDAR_STATE.value, 'wb') as f:
+                pickle.dump(self.events, f)
+        except Exception as e:
+            print(f"Warning: Could not save calendar state: {e}")
+    
     def _week_range_text(self) -> str:
         start = self.current_monday
         end = self.current_monday + timedelta(days=6)
@@ -233,6 +345,10 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                 none_lbl2.setParent(timeline_widget)
                 none_lbl2.setGeometry(4, 4, max(80, timeline_widget.width() - 8), 20)
                 none_lbl2.show()
+        
+        # Relayout event widgets after updating the week
+        QTimer.singleShot(50, self._relayout_event_widgets)
+    
     def prev_week(self) -> None:
         self.current_monday -= timedelta(days=7)
         self.update_week()
@@ -240,10 +356,10 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
         self.current_monday += timedelta(days=7)
         self.update_week()
     def go_to_today(self) -> None:
-        self.current_monday = _get_monday(datetime.today())
+        self.current_monday = _get_monday(_get_today_utc1())
         self.update_week()
     def create_event(self) -> None:
-        default_date = datetime.today().strftime("%Y-%m-%d")
+        default_date = _get_today_utc1().strftime("%Y-%m-%d")
         date_str, ok = QInputDialog.getText(self.window, "Event Date", "Enter date (YYYY-MM-DD):", text=default_date)  # type: ignore[arg-type]
         if not ok or not date_str:
             return
@@ -295,28 +411,44 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
 
         ev: Dict[str, Any] = {'name': name.strip(), 'time': time_val, 'end_time': end_time, 'all_day': is_all}
         self.events.setdefault(date_str, []).append(ev)
+        self._save_calendar_state()
         self.update_week()
 
     def _update_current_lines(self) -> None:
-         now = datetime.now()
+         """Update the current time indicator line."""
+         now = _get_now_utc1()
+         today = now.date()
          current_min = now.hour * 60 + now.minute
          if not self.day_timeline_widgets:
              return
+         
          ref_tl = self.day_timeline_widgets[0]
          ref_h = ref_tl.height() if ref_tl.height() > 0 else (self.HOUR_HEIGHT * 24)
          y_tl = int((current_min / (24.0 * 60.0)) * ref_h)
-         for idx, tl in enumerate(self.day_timeline_widgets):
+         
+         # Only show the line for today's column
+         for idx in range(7):
+             day_date = (self.current_monday + timedelta(days=idx)).date()
              line = self.day_current_lines[idx]
-             line.setGeometry(0, y_tl, tl.width(), 1)
-             line.raise_()
-             line.show()
-         spacer = getattr(self, '_time_spacer', None)
-         top_in_time = spacer.height() if spacer is not None else self.ALLDAY_AREA_HEIGHT
-         y_left = top_in_time + y_tl
-         self._left_time_line.setGeometry(0, y_left, self.time_widget.width(), 1)
-         self._left_time_line.raise_()
-         self._left_time_line.show()
-
+             tl = self.day_timeline_widgets[idx]
+             
+             if day_date == today:
+                 # Show line for today
+                 line.setGeometry(0, y_tl, tl.width(), 2)
+                 line.raise_()
+                 line.show()
+                 
+                 # Also show left time line
+                 spacer = getattr(self, '_time_spacer', None)
+                 top_in_time = spacer.height() if spacer is not None else self.ALLDAY_AREA_HEIGHT
+                 y_left = top_in_time + y_tl
+                 self._left_time_line.setGeometry(0, y_left, self.time_widget.width(), 2)
+                 self._left_time_line.raise_()
+                 self._left_time_line.show()
+             else:
+                 # Hide line for other days
+                 line.hide()
+    
     def on_event_click(self, date: str, ev_idx: int) -> None:
         evs = self.events.get(date, [])
         if ev_idx < 0 or ev_idx >= len(evs):
@@ -331,12 +463,24 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                 self.events.pop(date, None)
         except Exception:
             pass
+        self._save_calendar_state()
         self.update_week()
 
     def run(self) -> int:
         self.window.show()
-        return self.app.exec()
+        result = self.app.exec()
+        # Save state before closing
+        self._save_calendar_state()
+        return result
 
 
-def get_calendar() -> CalendarApp:
-    return CalendarApp()
+def get_calendar(planning_handler: Optional[Any] = None) -> CalendarApp:
+    """Create and return a CalendarApp instance.
+
+    Args:
+        planning_handler: Optional PlanningHandler instance to load events from
+
+    Returns:
+        CalendarApp instance
+    """
+    return CalendarApp(planning_handler=planning_handler)

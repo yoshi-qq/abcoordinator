@@ -24,10 +24,10 @@ class DataHandler:
 	def loadData(self) -> None:
 		if os.path.isfile(DataPaths.EVENTS.value):
 			with open(DataPaths.EVENTS.value, 'rb') as f:
-				self.rules = load(f)
+				self.events = load(f)
 		if os.path.isfile(DataPaths.RULES.value):
 			with open(DataPaths.RULES.value, 'rb') as f:
-				self.events = load(f)
+				self.rules = load(f)
 		if os.path.isfile(DataPaths.INSTANCES.value):
 			with open(DataPaths.INSTANCES.value, 'rb') as f:
 				self.instances = load(f)

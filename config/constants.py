@@ -24,3 +24,4 @@ class DataPaths(Enum):
 	EVENTS = 'data/events.pkl'
 	RULES = 'data/rules.pkl'
 	INSTANCES = 'data/instances.pkl'
+	CALENDAR_STATE = 'data/calendar_state.pkl'
