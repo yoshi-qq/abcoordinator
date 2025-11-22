@@ -47,7 +47,7 @@ class DataHandler:
 			return []
 		payload: Any = data
 		if isinstance(data, dict) and 'payload' in data:
-			payload = data.get('payload', [])
+			payload = data.get('payload', []) # type: ignore
 		if not isinstance(payload, list):
 			print(f"Warning: Unexpected payload type in {path}; resetting to empty list.")
 			return []

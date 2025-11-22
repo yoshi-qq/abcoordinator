@@ -16,7 +16,7 @@ DAY_LABEL_WIDTH = 12
 DAY_LABEL_HEIGHT = 8
 
 
-CUTOFF_DISTANCE: timedelta = timedelta(days=14)
+CUTOFF_DISTANCE: timedelta = timedelta(days=30)
 CHECK_INTERVAL: timedelta = timedelta(minutes=15)
 
 

@@ -123,10 +123,10 @@ class PlanningHandler:
 
 	Args:
 		events: List of Event objects to schedule
-		dayStartHour: Hour of day when scheduling starts (default: 6)
-		dayEndHour: Hour of day when scheduling ends (default: 22)
+		dayStartHour: Hour of day when scheduling starts (default: 0)
+		dayEndHour: Hour of day when scheduling ends (default: 24)
 	"""
-	def __init__(self, events: list[Event], dayStartHour: int = 6, dayEndHour: int = 22) -> None:
+	def __init__(self, events: list[Event], dayStartHour: int = 0, dayEndHour: int = 24) -> None:
 		self.days: dict[datetime, list[Event]] = {}
 		self.scheduledDays: dict[datetime, list[ScheduledEvent]] = {}
 		self.dayStartHour = dayStartHour
@@ -209,6 +209,22 @@ class PlanningHandler:
 		self.days[date_key].append(event)
 		return True
 
+	def _daySpanDuration(self) -> timedelta:
+		"""Return the configured scheduling window as a timedelta."""
+		span_hours: float = self.dayEndHour - self.dayStartHour
+		if span_hours <= 0:
+			span_hours += 24
+		return timedelta(hours=span_hours)
+
+	def _resolveDayBounds(self, date_key: datetime) -> tuple[datetime, datetime]:
+		"""Return the start and end datetimes for the scheduling window of *date_key*."""
+		base = date_key.replace(hour=0, minute=0, second=0, microsecond=0)
+		dayStart = base + timedelta(hours=self.dayStartHour)
+		dayEnd = base + timedelta(hours=self.dayEndHour)
+		if dayEnd <= dayStart:
+			dayEnd += timedelta(days=1)
+		return dayStart, dayEnd
+
 	def placeAutonomousEvent(self, event: Event) -> None:
 		"""
 		Place an autonomous event in the earliest available day with capacity.
@@ -225,7 +241,7 @@ class PlanningHandler:
 			if self.days.get(currentDate) is None:
 				self.days[currentDate] = []
 
-			availableHours: timedelta = timedelta(hours=(self.dayEndHour - self.dayStartHour))
+			availableHours: timedelta = self._daySpanDuration()
 			if getSum(self.days[currentDate]) + (event.duration if event.duration is not None else timedelta(0)) <= availableHours:
 				self.days[currentDate].append(event)
 				cont = False
@@ -239,8 +255,7 @@ class PlanningHandler:
 	def scheduleDay(self, date: datetime, events: list[Event]) -> list[ScheduledEvent]:
 		"""Schedule events within a specific day, finding time slots for each."""
 		date_key: datetime = date.replace(hour=0, minute=0, second=0, microsecond=0)
-		dayStart: datetime = date_key.replace(hour=self.dayStartHour, minute=0, second=0, microsecond=0)
-		dayEnd: datetime = date_key.replace(hour=self.dayEndHour, minute=0, second=0, microsecond=0)
+		dayStart, dayEnd = self._resolveDayBounds(date_key)
 
 		# Separate events with deadlines and without
 		eventsWithDeadlines: list[Event] = [e for e in events if e.deadline is not None]
