@@ -1,65 +1,121 @@
-import tkinter as tk
-from tkinter import simpledialog, messagebox
+"""PyQt5 calendar UI for ABCoordinator.
+
+This module requires PyQt5 at runtime. It uses TYPE_CHECKING and Any-typed Qt objects so static
+analysis tools won't raise import/type errors when PyQt5 is not present in the environment.
+"""
+from typing import Any, Dict, List
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
-from config.constants import WINDOW_HEIGHT, WINDOW_WIDTH, BG_TOP_FRAME, BTN_FG, BTN_BG_CREATE, BTN_BG_PRIMARY, BTN_BG_TODAY, DAY_LABEL_BG_EVEN, DAY_LABEL_BG_ODD, DAY_LABEL_FG, DAY_LABEL_FONT, DAY_LABEL_HEIGHT, DAY_LABEL_WIDTH
+
+# UI constants (used for styling)
+from config.constants import WINDOW_HEIGHT, WINDOW_WIDTH, BTN_BG_PRIMARY, BTN_BG_TODAY, BTN_BG_CREATE, DAY_LABEL_BG_EVEN, DAY_LABEL_BG_ODD
+
+# Runtime import of PyQt5. Use type-ignore so linters without PyQt5 installed won't fail parsing.
+try:
+    from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QInputDialog, QMessageBox, QSizePolicy  # type: ignore[import]
+    from PyQt5.QtCore import Qt  # type: ignore[import]
+except Exception as exc:  # pragma: no cover - runtime dependency
+    raise ImportError("PyQt5 is required. Install it with: python -m pip install --user PyQt5") from exc
+
+# Helper
+def _get_monday(date: datetime) -> datetime:
+    return date - timedelta(days=date.weekday())
 
 class CalendarApp:
-    def __init__(self, parent: tk.Tk) -> None:
-        self.parent: tk.Tk = parent
-        self.parent.title("ABCoordinator")
-        self.parent.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-        self.current_monday: datetime = self.get_monday(datetime.today())
+    """A simple, styled week calendar implemented with PyQt5.
+
+    Public API: .run() -> int
+    """
+
+    def __init__(self) -> None:
+        # QApplication
+        self._app: Any = QApplication.instance()
+        if self._app is None:
+            self._app = QApplication([])
+
+        # Main window
+        self.window: Any = QWidget()
+        self.window.setWindowTitle("ABCoordinator")
+        self.window.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
+
+        # State
+        self.current_monday: datetime = _get_monday(datetime.today())
         self.events: Dict[str, List[str]] = {}
 
-        top_frame: tk.Frame = tk.Frame(parent, bg=BG_TOP_FRAME)
-        top_frame.pack(fill="x", pady=10)
+        # Layouts
+        root_layout: Any = QVBoxLayout(self.window)
+        top_bar: Any = QHBoxLayout()
+        root_layout.addLayout(top_bar)
 
-        self.prev_btn = tk.Button(top_frame, text="<< Prev", command=self.prev_week, bg=BTN_BG_PRIMARY, fg=BTN_FG)
-        self.prev_btn.pack(side="left", padx=5, ipadx=10, ipady=5)
+        # Header
+        self.header: Any = QLabel(self._week_range_text())
+        self.header.setStyleSheet("font-weight:700; font-size:16px; margin:6px 0;")
+        top_bar.addWidget(self.header)
+        top_bar.addStretch(1)
 
-        self.today_btn = tk.Button(top_frame, text="Today", command=self.go_to_today, bg=BTN_BG_TODAY, fg=BTN_FG)
-        self.today_btn.pack(side="left", padx=5, ipadx=10, ipady=5)
+        # Controls
+        prev_btn: Any = QPushButton("<< Prev")
+        prev_btn.clicked.connect(self.prev_week)
+        top_bar.addWidget(prev_btn)
 
-        self.next_btn = tk.Button(top_frame, text="Next >>", command=self.next_week, bg=BTN_BG_PRIMARY, fg=BTN_FG)
-        self.next_btn.pack(side="left", padx=5, ipadx=10, ipady=5)
+        today_btn: Any = QPushButton("Today")
+        today_btn.setObjectName('today')
+        today_btn.clicked.connect(self.go_to_today)
+        top_bar.addWidget(today_btn)
 
-        self.create_btn = tk.Button(top_frame, text="Create Event", command=self.create_event, bg=BTN_BG_CREATE, fg=BTN_FG)
-        self.create_btn.pack(side="right", padx=10, ipadx=10, ipady=5)
+        next_btn: Any = QPushButton("Next >>")
+        next_btn.clicked.connect(self.next_week)
+        top_bar.addWidget(next_btn)
 
-        self.week_frame: tk.Frame = tk.Frame(parent)
-        self.week_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        create_btn: Any = QPushButton("Create Event")
+        create_btn.setObjectName('create')
+        create_btn.clicked.connect(self.create_event)
+        top_bar.addWidget(create_btn)
 
-        self.day_labels: List[tk.Label] = []
+        # Week grid
+        self.grid: Any = QGridLayout()
+        root_layout.addLayout(self.grid)
+
+        self.day_labels: List[Any] = []
         for i in range(7):
-            lbl = tk.Label(
-                self.week_frame,
-                text="",
-                borderwidth=2,
-                relief="ridge",
-                width=DAY_LABEL_WIDTH,
-                height=DAY_LABEL_HEIGHT,
-                bg=DAY_LABEL_BG_ODD,
-                fg=DAY_LABEL_FG,
-                anchor="n",
-                justify="center",
-                font=DAY_LABEL_FONT
-            )
-            lbl.grid(row=0, column=i, padx=5, pady=5, sticky="nsew")
+            lbl: Any = QLabel()
+            lbl.setWordWrap(True)
+            color = DAY_LABEL_BG_EVEN if i % 2 == 0 else DAY_LABEL_BG_ODD
+            lbl.setStyleSheet(f'background:{color}; padding:10px; border-radius:8px;')
+            lbl.setMinimumWidth(120)
+            lbl.setMinimumHeight(120)
+            self.grid.addWidget(lbl, 0, i)
             self.day_labels.append(lbl)
-            self.week_frame.grid_columnconfigure(i, weight=1)
+
+        # Apply simple theme for buttons
+        try:
+            self._app.setStyleSheet(
+                f"""
+QPushButton {{ background: {BTN_BG_PRIMARY}; color: white; border-radius:6px; padding:6px 10px; }}
+QPushButton#today {{ background: {BTN_BG_TODAY}; }}
+QPushButton#create {{ background: {BTN_BG_CREATE}; }}
+"""
+            )
+        except Exception:
+            pass
+
         self.update_week()
 
-    def get_monday(self, date: datetime) -> datetime:
-        return date - timedelta(days=date.weekday())
+    def _week_range_text(self) -> str:
+        start = self.current_monday
+        end = self.current_monday + timedelta(days=6)
+        return f"Week: {start.strftime('%d %b %Y')} — {end.strftime('%d %b %Y')}"
 
     def update_week(self) -> None:
+        self.header.setText(self._week_range_text())
         for i in range(7):
             day = self.current_monday + timedelta(days=i)
-            day_str = day.strftime("%A\n%d %b %Y")
-            events_text = "\n".join(self.events.get(day.strftime("%Y-%m-%d"), []))
-            bg_color = DAY_LABEL_BG_EVEN if i % 2 == 0 else DAY_LABEL_BG_ODD
-            self.day_labels[i].config(text=f"{day_str}\n{events_text}", bg=bg_color)
+            events_list = self.events.get(day.strftime("%Y-%m-%d"), [])
+            if events_list:
+                events_text = "\n".join(f"• {e}" for e in events_list)
+                text = f"<b>{day.strftime('%A')}</b><br><small>{day.strftime('%d %b %Y')}</small><br><br>{events_text}"
+            else:
+                text = f"<b>{day.strftime('%A')}</b><br><small>{day.strftime('%d %b %Y')}</small><br><br><span style='color:#777'>(no events)</span>"
+            self.day_labels[i].setText(text)
 
     def prev_week(self) -> None:
         self.current_monday -= timedelta(days=7)
@@ -70,25 +126,30 @@ class CalendarApp:
         self.update_week()
 
     def go_to_today(self) -> None:
-        self.current_monday = self.get_monday(datetime.today())
+        self.current_monday = _get_monday(datetime.today())
         self.update_week()
 
     def create_event(self) -> None:
-        event_date_str: Optional[str] = simpledialog.askstring("Event Date", "Enter date (YYYY-MM-DD):")
-        if not event_date_str:
+        date_str, ok = QInputDialog.getText(self.window, "Event Date", "Enter date (YYYY-MM-DD):")  # type: ignore[arg-type]
+        if not ok or not date_str:
             return
+        date_str = date_str.strip()
         try:
-            datetime.strptime(event_date_str, "%Y-%m-%d")
+            datetime.strptime(date_str, "%Y-%m-%d")
         except ValueError:
-            messagebox.showerror("Error", "Invalid date format")
+            QMessageBox.warning(self.window, "Error", "Invalid date format")  # type: ignore[arg-type]
             return
-        event_name: Optional[str] = simpledialog.askstring("Event Name", "Enter event name:")
-        if not event_name:
+        name, ok2 = QInputDialog.getText(self.window, "Event Name", "Enter event name:")  # type: ignore[arg-type]
+        if not ok2 or not name:
             return
-        self.events.setdefault(event_date_str, []).append(event_name.strip())
+        self.events.setdefault(date_str, []).append(name.strip())
         self.update_week()
 
-    def run(self) -> None:
-        self.parent.mainloop()
+    def run(self) -> int:
+        self.window.show()
+        return self._app.exec()  # type: ignore[return-value]
 
-calendar = CalendarApp(tk.Tk())
+
+def get_calendar() -> CalendarApp:
+    """Factory used by entryPoint; returns a PyQt5 CalendarApp instance."""
+    return CalendarApp()
