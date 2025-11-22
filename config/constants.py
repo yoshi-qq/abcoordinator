@@ -20,6 +20,21 @@ CUTOFF_DISTANCE: timedelta = timedelta(days=30)
 CHECK_INTERVAL: timedelta = timedelta(minutes=15)
 
 
+EVENT_COLOR_PALETTE: list[tuple[str, str]] = [
+	("Ocean", "#4285F4"),
+	("Forest", "#0F9D58"),
+	("Marigold", "#F6BF26"),
+	("Coral", "#DB4437"),
+	("Plum", "#8E24AA"),
+	("Slate", "#5F6368"),
+	("Teal", "#00897B"),
+	("Rose", "#EC407A"),
+	("Indigo", "#3949AB"),
+	("Copper", "#FF7043"),
+]
+DEFAULT_EVENT_COLOR: str = EVENT_COLOR_PALETTE[0][1]
+
+
 class DataPaths(Enum):
 	EVENTS = 'data/events.pkl'
 	RULES = 'data/rules.pkl'

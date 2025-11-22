@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from itertools import cycle
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 import sys
@@ -13,10 +14,20 @@ if str(PROJECT_ROOT) not in sys.path:
 from classes.eventTypes import Event  # noqa: E402
 from classes.ruleTypes import ConditionRule, FrequencyRule  # noqa: E402
 from classes.timeUnits import TimeUnit  # noqa: E402
-from config.constants import DataPaths  # noqa: E402
+from config.constants import DataPaths, EVENT_COLOR_PALETTE, DEFAULT_EVENT_COLOR  # noqa: E402
 from handler.dataHandler import DataHandler  # noqa: E402
 
 Definition = Dict[str, Any]
+COLOR_VALUES: List[str] = [hex_code for _, hex_code in EVENT_COLOR_PALETTE]
+_COLOR_CYCLE = cycle(COLOR_VALUES)
+
+
+def nextColor() -> str:
+    """Return the next color in the palette, falling back to the default."""
+    try:
+        return next(_COLOR_CYCLE)
+    except StopIteration:
+        return DEFAULT_EVENT_COLOR
 
 
 def main() -> None:
@@ -959,6 +970,7 @@ def createEventFromDefinition(baseDate: datetime, definition: Definition) -> Eve
         rule=rule,
         iterations=definition.get("iterations"),
         deadline=definition.get("deadline"),
+        color=definition.get("color") or nextColor(),
     )
 
 
@@ -970,6 +982,7 @@ def createEvent(
     rule: FrequencyRule | ConditionRule | None,
     iterations: int | None,
     deadline: datetime | None,
+    color: str | None,
 ) -> Event:
     return Event(
         name=name,
@@ -978,6 +991,7 @@ def createEvent(
         rule=rule,
         iterationsRemaining=iterations,
         deadline=deadline,
+        color=color,
     )
 
 

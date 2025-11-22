@@ -2,7 +2,19 @@ from typing import Any, Dict, List, Optional, cast
 from datetime import datetime, timedelta, timezone
 import pickle
 import os
-from config.constants import WINDOW_HEIGHT, WINDOW_WIDTH, BTN_BG_PRIMARY, BTN_BG_TODAY, BTN_BG_CREATE, DAY_LABEL_BG_EVEN, DAY_LABEL_BG_ODD, CHECK_INTERVAL, DataPaths
+from config.constants import (
+    WINDOW_HEIGHT,
+    WINDOW_WIDTH,
+    BTN_BG_PRIMARY,
+    BTN_BG_TODAY,
+    BTN_BG_CREATE,
+    DAY_LABEL_BG_EVEN,
+    DAY_LABEL_BG_ODD,
+    CHECK_INTERVAL,
+    DataPaths,
+    EVENT_COLOR_PALETTE,
+    DEFAULT_EVENT_COLOR,
+)
 from handler.dataHandler import DataHandler
 from handler.planningHandler import PlanningHandler
 from classes.eventTypes import Event
@@ -67,6 +79,46 @@ KEY_LEFT = _resolveQtKey('Key_Left', 0x01000012)
 KEY_RIGHT = _resolveQtKey('Key_Right', 0x01000014)
 KEY_T = _resolveQtKey('Key_T', ord('T'))
 KEY_HOME = _resolveQtKey('Key_Home', 0x01000010)
+
+
+def _normalizeColorValue(value: Optional[str]) -> str:
+    """Return a sanitized #RRGGBB string or the default color."""
+    if not value:
+        return DEFAULT_EVENT_COLOR
+    text = value.strip()
+    if not text:
+        return DEFAULT_EVENT_COLOR
+    if not text.startswith('#'):
+        text = f'#{text}'
+    if len(text) == 4:
+        text = '#' + ''.join(ch * 2 for ch in text[1:])
+    if len(text) != 7:
+        return DEFAULT_EVENT_COLOR
+    try:
+        int(text[1:], 16)
+    except ValueError:
+        return DEFAULT_EVENT_COLOR
+    return text.upper()
+
+
+def _hexToRgbTuple(value: Optional[str]) -> tuple[int, int, int]:
+    """Convert a hex color into its RGB tuple."""
+    normalized = _normalizeColorValue(value)
+    return (
+        int(normalized[1:3], 16),
+        int(normalized[3:5], 16),
+        int(normalized[5:7], 16),
+    )
+
+
+def _eventColorStyles(value: Optional[str]) -> Dict[str, str]:
+    """Return background/border/solid colors derived from *value*."""
+    r, g, b = _hexToRgbTuple(value)
+    return {
+        'background': f"rgba({r},{g},{b},0.18)",
+        'border': f"rgba({r},{g},{b},0.65)",
+        'solid': _normalizeColorValue(value),
+    }
 
 def _getNowUtc1() -> datetime:
     """Return the current UTC+1 timestamp without timezone info."""
@@ -147,6 +199,12 @@ class EventDialog(QDialog):
         self.end_time_edit.setDisplayFormat("HH:mm")
         self.end_time_edit.setTime(QTime(10, 0))
         form_layout.addRow("End", self.end_time_edit)
+
+        self.color_combo = QComboBox()
+        for label, hex_value in EVENT_COLOR_PALETTE:
+            self.color_combo.addItem(f"{label} ({hex_value})", hex_value)
+        self._selectColor(DEFAULT_EVENT_COLOR)
+        form_layout.addRow("Color", self.color_combo)
 
         self.iterations_spin = QSpinBox()
         self.iterations_spin.setMinimum(0)
@@ -248,6 +306,15 @@ class EventDialog(QDialog):
 
         return widget
 
+    def _selectColor(self, value: Optional[str]) -> None:
+        """Select the matching color entry, falling back to the default."""
+        normalized = _normalizeColorValue(value)
+        idx = self.color_combo.findData(normalized)
+        if idx < 0:
+            idx = self.color_combo.findData(DEFAULT_EVENT_COLOR)
+        if idx >= 0:
+            self.color_combo.setCurrentIndex(idx)
+
     def _onAllDayToggled(self, checked: bool) -> None:
         """Enable or disable time fields when all-day mode changes."""
         self.start_time_edit.setEnabled(not checked)
@@ -338,6 +405,8 @@ class EventDialog(QDialog):
                 self.cond_unit.setCurrentIndex(unit_idx)
                 self.cond_index_spin.setValue(int(rule.get("index", 1)))
 
+        self._selectColor(data.get("color"))
+
     def getData(self) -> Dict[str, Any]:
         """Return the sanitized dialog data for persistence or scheduling."""
         date_qt = self.date_edit.date()
@@ -371,6 +440,7 @@ class EventDialog(QDialog):
             "start_time": start_time,
             "end_time": end_time,
             "rule": rule_data,
+            "color": _normalizeColorValue(cast(Optional[str], self.color_combo.currentData())),
             "iterations_remaining": int(self.iterations_spin.value()) or None,
             "time_remaining": float(self.time_remaining_spin.value()) if self.time_remaining_spin.value() > 0 else None,
         }
@@ -675,6 +745,7 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
         if time_remaining is None or time_remaining <= 0:
             time_remaining = duration.total_seconds() / 3600.0
         iterations_remaining = event_data.get('iterations_remaining')
+        color = _normalizeColorValue(event_data.get('color'))
 
         return Event(
             name=event_data['name'],
@@ -683,6 +754,7 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
             rule=rule_obj,
             timeRemaining=time_remaining,
             iterationsRemaining=iterations_remaining,
+            color=color,
         )
 
     def _workdayDuration(self) -> timedelta:
@@ -740,6 +812,7 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                     'end_time': end_time_str,
                     'all_day': is_all_day,
                     'rule': self._serializeRule(event.rule),
+                    'color': _normalizeColorValue(getattr(event, 'color', None)),
                     'source': 'scheduled',
                     'clickable': True,
                     'date': date_str,
@@ -779,6 +852,7 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                             saved_dict.setdefault('source', 'manual')
                             saved_dict.setdefault('clickable', True)
                             saved_dict.setdefault('date', date_str)
+                            saved_dict['color'] = _normalizeColorValue(saved_dict.get('color'))
                             normalized.append(saved_dict)
                         target = self.events.setdefault(date_str, [])
                         for saved_ev in normalized:
@@ -805,6 +879,7 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
             'end_time': event_data['end_time'],
             'all_day': event_data['all_day'],
             'rule': event_data.get('rule'),
+            'color': _normalizeColorValue(event_data.get('color')),
             'source': 'manual',
             'clickable': True,
             'date': date_key,
@@ -855,7 +930,10 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                         'clickable': ev.get('clickable', True),
                     }
                     lbl = EventLabel(payload, self, f"{label_prefix} {ev.get('name')}{summary}")
-                    lbl.setStyleSheet('font-weight:600; padding:2px 0;')
+                    styles = _eventColorStyles(ev.get('color'))
+                    lbl.setStyleSheet(
+                        f"font-weight:600; padding:2px 0; border-left:4px solid {styles['solid']}; padding-left:6px;"
+                    )
                     all_layout.addWidget(lbl)
             else:
                 none_lbl = QLabel("(no all-day events)")
@@ -906,7 +984,10 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                     }
                     ev_widget = EventLabel(payload, self, timeline_widget)
                     ev_widget.setText(f"{start} — {end}  {name}{summary}")
-                    ev_widget.setStyleSheet("background: rgba(66,133,244,0.12); border-left: 4px solid rgba(66,133,244,0.28); border-radius:6px; padding:6px; color:#111;")
+                    styles = _eventColorStyles(ev.get('color'))
+                    ev_widget.setStyleSheet(
+                        f"background: {styles['background']}; border-left: 4px solid {styles['border']}; border-radius:6px; padding:6px; color:#111;"
+                    )
                     ev_widget.setWordWrap(True)
                     ev_widget.setGeometry(4, y, max(80, timeline_widget.width() - 8), height_px)
                     ev_widget.show()
@@ -1081,6 +1162,7 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
             'start_time': event_ref.get('time'),
             'end_time': event_ref.get('end_time'),
             'rule': event_ref.get('rule'),
+            'color': _normalizeColorValue(event_ref.get('color')),
         }
 
     def _applyManualEventUpdate(
@@ -1096,6 +1178,7 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
             'end_time': updated['end_time'],
             'all_day': updated['all_day'],
             'rule': updated.get('rule'),
+            'color': _normalizeColorValue(updated.get('color')),
             'source': 'manual',
             'clickable': True,
             'date': updated['date'],
@@ -1190,6 +1273,7 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
             'start_time': start_dt.strftime("%H:%M"),
             'end_time': end_dt.strftime("%H:%M"),
             'rule': self._serializeRule(event_obj.rule),
+            'color': _normalizeColorValue(event_meta.get('color') if event_meta else getattr(event_obj, 'color', None)),
             'iterations_remaining': event_obj.iterationsRemaining,
             'time_remaining': event_obj.timeRemaining,
         }
@@ -1215,6 +1299,7 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
         target.rule = source.rule
         target.timeRemaining = source.timeRemaining
         target.iterationsRemaining = source.iterationsRemaining
+        target.color = source.color
 
     def run(self) -> int:
         """Start the Qt event loop and persist state before exit."""
