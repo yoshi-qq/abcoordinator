@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta
+import calendar
+from math import modf
+from dateutil.relativedelta import relativedelta
 from classes.eventTypes import Event
 from classes.ruleTypes import FrequencyRule, ConditionRule
 from classes.timeUnits import TimeUnit
@@ -14,7 +17,7 @@ class ScheduledEvent:
 	def __repr__(self) -> str:
 		return f"ScheduledEvent({self.event.name} at {self.scheduledTime.time()})"
 
-def delta(unit: TimeUnit, factor: float) -> timedelta:
+def _basic_delta(unit: TimeUnit, factor: float) -> timedelta:
 	match unit:
 		case 'day':
 			return timedelta(days=factor)
@@ -26,10 +29,40 @@ def delta(unit: TimeUnit, factor: float) -> timedelta:
 			return timedelta(minutes=factor)
 		case 'second':
 			return timedelta(seconds=factor)
-		case 'month':
-			return timedelta(days=30 * factor) # TODO: Improve month handling
-		case 'year':
-			return timedelta(days=365 * factor) # TODO: Improve year handling
+		case _:
+			raise ValueError(f"Unsupported unit for basic delta: {unit}")
+
+
+def _apply_months(base: datetime, total_months: float) -> datetime:
+	fractional, whole = modf(total_months)
+	result = base + relativedelta(months=int(whole))
+	if fractional:
+		days_in_month = calendar.monthrange(result.year, result.month)[1]
+		result += timedelta(days=fractional * days_in_month)
+	return result
+
+
+def _apply_years(base: datetime, total_years: float) -> datetime:
+	fractional, whole = modf(total_years)
+	result = base + relativedelta(years=int(whole))
+	if fractional:
+		days_in_year = 366 if calendar.isleap(result.year) else 365
+		result += timedelta(days=fractional * days_in_year)
+	return result
+
+
+def advance_date(base: datetime, unit: TimeUnit, factor: float, iterations: int = 1) -> datetime:
+	"""Advance *base* by (factor × iterations) respecting calendar semantics."""
+	if iterations == 0 or factor == 0:
+		return base
+	total = factor * iterations
+	if unit in {'second', 'minute', 'hour', 'day', 'week'}:
+		return base + _basic_delta(unit, total)
+	if unit == 'month':
+		return _apply_months(base, total)
+	if unit == 'year':
+		return _apply_years(base, total)
+	raise ValueError(f"Unsupported time unit: {unit}")
 
 def getSum(events: list[Event]) -> timedelta:
 	"""
@@ -145,12 +178,13 @@ class PlanningHandler:
 		Returns:
 			True if the event was placed successfully, False if beyond cutoff distance
 		"""
-		date: datetime = event.startDate + iteration*delta(rule.unit, rule.rate)
+		date: datetime = advance_date(event.startDate, rule.unit, rule.rate, iteration)
+		date_key: datetime = date.replace(hour=0, minute=0, second=0, microsecond=0)
 		if date > datetime.now() + CUTOFF_DISTANCE:
 			return False
-		if self.days.get(date) is None:
-			self.days[date] = []
-		self.days[date].append(event)
+		if self.days.get(date_key) is None:
+			self.days[date_key] = []
+		self.days[date_key].append(event)
 		return True
 
 	def placeConditionEvent(self, event: Event, rule: ConditionRule, iteration: int = 0) -> bool:
@@ -165,13 +199,14 @@ class PlanningHandler:
 		Returns:
 			True if the event was placed successfully, False if beyond cutoff distance
 		"""
-		baseDate: datetime = event.startDate + iteration*delta(rule.reference, rule.referenceFactor)
-		date: datetime = baseDate + (rule.index-1) * delta(rule.unit, rule.unitFactor)
+		baseDate: datetime = advance_date(event.startDate, rule.reference, rule.referenceFactor, iteration)
+		date: datetime = advance_date(baseDate, rule.unit, rule.unitFactor, rule.index - 1)
+		date_key: datetime = date.replace(hour=0, minute=0, second=0, microsecond=0)
 		if date > datetime.now() + CUTOFF_DISTANCE:
 			return False
-		if self.days.get(date) is None:
-			self.days[date] = []
-		self.days[date].append(event)
+		if self.days.get(date_key) is None:
+			self.days[date_key] = []
+		self.days[date_key].append(event)
 		return True
 
 	def placeAutonomousEvent(self, event: Event) -> None:
@@ -203,8 +238,9 @@ class PlanningHandler:
 
 	def scheduleDay(self, date: datetime, events: list[Event]) -> list[ScheduledEvent]:
 		"""Schedule events within a specific day, finding time slots for each."""
-		dayStart: datetime = date.replace(hour=self.dayStartHour, minute=0, second=0, microsecond=0)
-		dayEnd: datetime = date.replace(hour=self.dayEndHour, minute=0, second=0, microsecond=0)
+		date_key: datetime = date.replace(hour=0, minute=0, second=0, microsecond=0)
+		dayStart: datetime = date_key.replace(hour=self.dayStartHour, minute=0, second=0, microsecond=0)
+		dayEnd: datetime = date_key.replace(hour=self.dayEndHour, minute=0, second=0, microsecond=0)
 
 		# Separate events with deadlines and without
 		eventsWithDeadlines: list[Event] = [e for e in events if e.deadline is not None]
@@ -217,19 +253,19 @@ class PlanningHandler:
 
 		# Schedule events with deadlines first
 		for event in eventsWithDeadlines:
-			scheduled = self.scheduleEvent(event, scheduledEvents, dayStart, dayEnd)
+			scheduled = self.scheduleEvent(event, scheduledEvents, dayStart, dayEnd, date_key)
 			if scheduled:
 				scheduledEvents.append(scheduled)
 
 		# Then schedule events without deadlines
 		for event in eventsWithoutDeadlines:
-			scheduled = self.scheduleEvent(event, scheduledEvents, dayStart, dayEnd)
+			scheduled = self.scheduleEvent(event, scheduledEvents, dayStart, dayEnd, date_key)
 			if scheduled:
 				scheduledEvents.append(scheduled)
 
 		return scheduledEvents
 
-	def scheduleEvent(self, event: Event, existingSchedule: list[ScheduledEvent], dayStart: datetime, dayEnd: datetime) -> ScheduledEvent | None:
+	def scheduleEvent(self, event: Event, existingSchedule: list[ScheduledEvent], dayStart: datetime, dayEnd: datetime, target_day: datetime) -> ScheduledEvent | None:
 		"""
 		Find a time slot for an event and create a ScheduledEvent.
 
@@ -242,9 +278,24 @@ class PlanningHandler:
 		Returns:
 			A ScheduledEvent object if a slot was found, None otherwise
 		"""
-		duration: timedelta = event.duration if event.duration is not None else timedelta(hours=1)		# If event has a specific start time preference, try that first
+		duration: timedelta = event.duration if event.duration is not None else timedelta(hours=1)
+		workday_span: timedelta = dayEnd - dayStart
+		if duration >= workday_span:
+			if self.isSlotAvailable(dayStart, duration=min(duration, workday_span), existingSchedule=existingSchedule):
+				return ScheduledEvent(event, dayStart)
+			return None
+
 		if event.startDate.hour != 0 or event.startDate.minute != 0:
-			preferredTime: datetime = event.startDate
+			preferredTime: datetime = target_day.replace(
+				hour=event.startDate.hour,
+				minute=event.startDate.minute,
+				second=event.startDate.second,
+				microsecond=0,
+			)
+			if preferredTime < dayStart:
+				preferredTime = dayStart
+			elif preferredTime + duration > dayEnd:
+				preferredTime = dayEnd - duration
 			if self.isSlotAvailable(preferredTime, duration, existingSchedule):
 				return ScheduledEvent(event, preferredTime)
 

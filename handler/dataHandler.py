@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 from classes.calendarTypes import EventInstance
 from classes.eventTypes import Event
 from classes.ruleTypes import Rule
@@ -5,6 +7,9 @@ from pickle import dump, load
 import os
 
 from config.constants import DataPaths
+
+DATA_VERSION = 1
+
 
 class DataHandler:
 	def __init__(self) -> None:
@@ -15,19 +20,35 @@ class DataHandler:
 		self.loadData()
 
 	def saveData(self) -> None:
-		with open(DataPaths.EVENTS.value, 'wb') as f:
-			dump(self.events, f)
-		with open(DataPaths.RULES.value, 'wb') as f:
-			dump(self.rules, f)
-		with open(DataPaths.INSTANCES.value, 'wb') as f:
-			dump(self.instances, f)
+		self._write_payload(DataPaths.EVENTS.value, self.events)
+		self._write_payload(DataPaths.RULES.value, self.rules)
+		self._write_payload(DataPaths.INSTANCES.value, self.instances)
+
 	def loadData(self) -> None:
-		if os.path.isfile(DataPaths.EVENTS.value):
-			with open(DataPaths.EVENTS.value, 'rb') as f:
-				self.events = load(f)
-		if os.path.isfile(DataPaths.RULES.value):
-			with open(DataPaths.RULES.value, 'rb') as f:
-				self.rules = load(f)
-		if os.path.isfile(DataPaths.INSTANCES.value):
-			with open(DataPaths.INSTANCES.value, 'rb') as f:
-				self.instances = load(f)
+		self.events = self._load_payload(DataPaths.EVENTS.value)
+		self.rules = self._load_payload(DataPaths.RULES.value)
+		self.instances = self._load_payload(DataPaths.INSTANCES.value)
+
+	def _write_payload(self, path: str, payload: Any) -> None:
+		directory = os.path.dirname(path)
+		if directory:
+			os.makedirs(directory, exist_ok=True)
+		with open(path, 'wb') as handle:
+			dump({'version': DATA_VERSION, 'payload': payload}, handle)
+
+	def _load_payload(self, path: str) -> list[Any]:
+		if not os.path.isfile(path):
+			return []
+		try:
+			with open(path, 'rb') as handle:
+				data = load(handle)
+		except Exception as exc:
+			print(f"Warning: Could not load {path}: {exc}. Resetting to empty list.")
+			return []
+		payload: Any = data
+		if isinstance(data, dict) and 'payload' in data:
+			payload = data.get('payload', [])
+		if not isinstance(payload, list):
+			print(f"Warning: Unexpected payload type in {path}; resetting to empty list.")
+			return []
+		return cast(list[Any], payload)
