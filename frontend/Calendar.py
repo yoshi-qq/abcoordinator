@@ -3,18 +3,31 @@ from datetime import datetime, timedelta
 from config.constants import WINDOW_HEIGHT, WINDOW_WIDTH, BTN_BG_PRIMARY, BTN_BG_TODAY, BTN_BG_CREATE, DAY_LABEL_BG_EVEN, DAY_LABEL_BG_ODD
 try:
     from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QInputDialog, QMessageBox, QScrollArea, QSizePolicy  # type: ignore[import]
-    from PyQt5.QtCore import QTimer, QPoint  # type: ignore[import]
+    from PyQt5.QtCore import QTimer, Qt  # type: ignore[import]
 except Exception as exc:
     raise ImportError("PyQt5 is required. Install it with: python -m pip install --user PyQt5") from exc
 
 def _get_monday(date: datetime) -> datetime:
     return date - timedelta(days=date.weekday())
 
+class EventLabel(QLabel):
+    def __init__(self, date: str, idx: int, owner: Any, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._date = date
+        self._idx = idx
+        self._owner = owner
+        return
+    def mousePressEvent(self, ev: Any) -> None:
+        try:
+            self._owner.on_event_click(self._date, self._idx)
+        except Exception:
+            pass
+
 class CalendarApp:
     def __init__(self) -> None:
-        self._app: Any = QApplication.instance()
-        if self._app is None:
-            self._app = QApplication([])
+        self.app: Any = QApplication.instance()
+        if self.app is None:
+            self.app = QApplication([])
         self.window: Any = QWidget()
         self.window.setWindowTitle("ABCoordinator")
         self.window.resize(WINDOW_WIDTH, WINDOW_HEIGHT + 200)
@@ -47,7 +60,6 @@ class CalendarApp:
         HOUR_HEIGHT = 40
         self.HOUR_HEIGHT = HOUR_HEIGHT
         self.ALLDAY_AREA_HEIGHT = ALLDAY_AREA_HEIGHT
-        self.tz_offset_hours = 1
         time_widget: Any = QWidget()
         time_widget.setFixedWidth(92)
         self.time_widget = time_widget
@@ -76,7 +88,6 @@ class CalendarApp:
             dw: Any = QWidget()
             dl: Any = QVBoxLayout(dw)
             dl.setContentsMargins(6, 6, 6, 6)
-            dw.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)  # type: ignore[attr-defined]
             top_container: Any = QWidget()
             top_container_layout: Any = QVBoxLayout(top_container)
             top_container_layout.setContentsMargins(0, 0, 0, 0)
@@ -117,7 +128,7 @@ class CalendarApp:
         scroll.setWidget(content_widget)
         middle_layout.addWidget(scroll, stretch=1)
         try:
-            self._app.setStyleSheet(
+            self.app.setStyleSheet(
                 f"""
 QPushButton {{ background: {BTN_BG_PRIMARY}; color: white; border-radius:6px; padding:6px 10px; }}
 QPushButton#today {{ background: {BTN_BG_TODAY}; }}
@@ -135,21 +146,16 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
         self._timer.timeout.connect(self._update_current_lines)
         self._timer.start(60 * 1000)
         QTimer.singleShot(0, self._update_current_lines)
-        def _on_resize(event: Any) -> None:
-            try:
-                self._relayout_event_widgets()
-            except Exception:
-                pass
-        self.window.resizeEvent = _on_resize
 
     def _relayout_event_widgets(self) -> None:
         for tl in self.day_timeline_widgets:
             w = tl.width()
             for child in tl.findChildren(QLabel):
-                if child.objectName() == 'current_line':
-                    continue
                 geom = child.geometry()
-                child.setGeometry(4, geom.y(), max(80, w - 8), geom.height())
+                try:
+                    child.setGeometry(4, geom.y(), max(80, w - 8), geom.height())
+                except Exception:
+                    pass
 
     def _week_range_text(self) -> str:
         start = self.current_monday
@@ -196,8 +202,10 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                         return hh*60 + mm
                     except Exception:
                         return 0
-                timed_events.sort(key=_time_key)
-                for ev in timed_events:
+                # sort the original events list indices by start time
+                indexed = [(idx, e) for idx, e in enumerate(events) if not e.get('all_day')]
+                indexed.sort(key=lambda ie: _time_key(ie[1]))
+                for ev_idx, ev in indexed:
                     start = ev.get('time') or '00:00'
                     end = ev.get('end_time') or start
                     name = ev.get('name')
@@ -213,7 +221,8 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                         end_min = start_min + 30
                     y = int((start_min / 60.0) * self.HOUR_HEIGHT)
                     height_px = max(18, int(((end_min - start_min) / 60.0) * self.HOUR_HEIGHT))
-                    ev_widget = QLabel(f"{start} — {end}  {name}", timeline_widget)
+                    ev_widget = EventLabel(date, ev_idx, self, timeline_widget)
+                    ev_widget.setText(f"{start} — {end}  {name}")
                     ev_widget.setStyleSheet("background: rgba(66,133,244,0.12); border-left: 4px solid rgba(66,133,244,0.28); border-radius:6px; padding:6px; color:#111;")
                     ev_widget.setWordWrap(True)
                     ev_widget.setGeometry(4, y, max(80, timeline_widget.width() - 8), height_px)
@@ -301,20 +310,33 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
              line.setGeometry(0, y_tl, tl.width(), 1)
              line.raise_()
              line.show()
-         try:
-             pt = ref_tl.mapTo(self.time_widget, QPoint(0, 0))
-             top_in_time = pt.y()
-         except Exception:
-             spacer = getattr(self, '_time_spacer', None)
-             top_in_time = spacer.height() if spacer is not None else self.ALLDAY_AREA_HEIGHT
+         spacer = getattr(self, '_time_spacer', None)
+         top_in_time = spacer.height() if spacer is not None else self.ALLDAY_AREA_HEIGHT
          y_left = top_in_time + y_tl
          self._left_time_line.setGeometry(0, y_left, self.time_widget.width(), 1)
          self._left_time_line.raise_()
          self._left_time_line.show()
 
+    def on_event_click(self, date: str, ev_idx: int) -> None:
+        evs = self.events.get(date, [])
+        if ev_idx < 0 or ev_idx >= len(evs):
+            return
+        ev = evs[ev_idx]
+        choice, ok = QInputDialog.getItem(self.window, "Delete?", f"Delete event: {ev.get('name')}?", ["No", "Yes"], 0, False)  # type: ignore[arg-type]
+        if not ok or choice != "Yes":
+            return
+        try:
+            evs.pop(ev_idx)
+            if not evs:
+                self.events.pop(date, None)
+        except Exception:
+            pass
+        self.update_week()
+
     def run(self) -> int:
         self.window.show()
-        return self._app.exec()
+        return self.app.exec()
+
 
 def get_calendar() -> CalendarApp:
     return CalendarApp()

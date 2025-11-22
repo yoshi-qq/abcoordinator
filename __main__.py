@@ -1,5 +1,7 @@
 import sys
 from pathlib import Path
+import faulthandler
+faulthandler.enable()
 
 def main() -> None:
 	project_root = Path(__file__).parent
