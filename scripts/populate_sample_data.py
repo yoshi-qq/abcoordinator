@@ -93,7 +93,7 @@ def buildDailyEvents(config: Dict[str, datetime]) -> List[Event]:
 
 def buildWeeklyEventsA(config: Dict[str, datetime]) -> List[Event]:
     definitions: List[Definition] = [
-        # Montag: Schultag mit Profilkurs
+        # Montag: Profilkurs
         {
             "name": "Unterricht Block 1 (Mo)",
             "offset_days": 0,
@@ -144,8 +144,7 @@ def buildWeeklyEventsA(config: Dict[str, datetime]) -> List[Event]:
             "duration": durationMinutes(90),
             "iterations": 1,
         },
-        
-        # Dienstag: Schultag mit Fußballtraining
+        # Dienstag: Fußballtraining
         {
             "name": "Unterricht Block 1 (Di)",
             "offset_days": 1,
@@ -203,8 +202,8 @@ def buildWeeklyEventsA(config: Dict[str, datetime]) -> List[Event]:
             "rule_factory": frequencyRule("week", 1),
             "iterations": 10,
         },
-        
-        # Mittwoch: Langer Schultag mit Musikschule
+
+        # Mittwoch: Lange mitMusikschule
         {
             "name": "Unterricht Block 1 (Mi)",
             "offset_days": 2,
@@ -262,8 +261,8 @@ def buildWeeklyEventsA(config: Dict[str, datetime]) -> List[Event]:
             "duration": durationMinutes(90),
             "iterations": 1,
         },
-        
-        # Donnerstag: Schultag mit Nachhilfe
+
+        # Donnerstag: Nachhilfe
         {
             "name": "Unterricht Block 1 (Do)",
             "offset_days": 3,
@@ -328,8 +327,8 @@ def buildWeeklyEventsA(config: Dict[str, datetime]) -> List[Event]:
             "rule_factory": frequencyRule("week", 1),
             "iterations": 10,
         },
-        
-        # Freitag: Kurzer Schultag mit Jugendtreff
+
+        # Freitag: Kurz mit Jugendtreff
         {
             "name": "Unterricht Block 1 (Fr)",
             "offset_days": 4,
@@ -387,7 +386,7 @@ def buildWeeklyEventsA(config: Dict[str, datetime]) -> List[Event]:
             "rule_factory": frequencyRule("week", 1),
             "iterations": 10,
         },
-        
+
         # Samstag: Freizeit
         {
             "name": "Ausschlafen (Sa)",
@@ -418,7 +417,6 @@ def buildWeeklyEventsA(config: Dict[str, datetime]) -> List[Event]:
             "duration": durationMinutes(180),
             "iterations": 1,
         },
-        
         # Sonntag: Entspannung
         {
             "name": "Familienfrühstück (So)",
@@ -522,7 +520,7 @@ def buildWeeklyEventsB(config: Dict[str, datetime]) -> List[Event]:
             "duration": durationMinutes(75),
             "iterations": 1,
         },
-        
+
         # Dienstag Woche B
         {
             "name": "Unterricht Block 1 (Di-B)",
@@ -581,7 +579,7 @@ def buildWeeklyEventsB(config: Dict[str, datetime]) -> List[Event]:
             "rule_factory": frequencyRule("week", 2),
             "iterations": 5,
         },
-        
+
         # Mittwoch Woche B
         {
             "name": "Unterricht Block 1 (Mi-B)",
@@ -640,7 +638,7 @@ def buildWeeklyEventsB(config: Dict[str, datetime]) -> List[Event]:
             "duration": durationMinutes(90),
             "iterations": 1,
         },
-        
+
         # Donnerstag Woche B
         {
             "name": "Unterricht Block 1 (Do-B)",
@@ -699,7 +697,7 @@ def buildWeeklyEventsB(config: Dict[str, datetime]) -> List[Event]:
             "rule_factory": frequencyRule("week", 2),
             "iterations": 5,
         },
-        
+
         # Freitag Woche B
         {
             "name": "Unterricht Block 1 (Fr-B)",
@@ -758,7 +756,7 @@ def buildWeeklyEventsB(config: Dict[str, datetime]) -> List[Event]:
             "rule_factory": frequencyRule("week", 2),
             "iterations": 5,
         },
-        
+
         # Samstag Woche B
         {
             "name": "Sport & Fitness (Sa-B)",
@@ -789,7 +787,7 @@ def buildWeeklyEventsB(config: Dict[str, datetime]) -> List[Event]:
             "duration": durationMinutes(180),
             "iterations": 1,
         },
-        
+
         # Sonntag Woche B
         {
             "name": "Familienfrühstück (So-B)",
