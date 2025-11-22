@@ -1,4 +1,4 @@
-from frontend.Calendar import app
+from frontend.Calendar import calendar
 
 def entryPointFunc():
-  app.run()
+  calendar.run()
