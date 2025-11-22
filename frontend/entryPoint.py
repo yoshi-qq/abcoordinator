@@ -1,2 +1,4 @@
+from Calendar import app
+
 def entryPointFunc():
-  pass # TODO
+  app.run()
