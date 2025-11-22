@@ -1,7 +1,11 @@
-from frontend.entryPoint import entryPointFunc
-
+import sys
+from pathlib import Path
 
 def main() -> None:
+	project_root = Path(__file__).parent
+	if str(project_root) not in sys.path:
+		sys.path.insert(0, str(project_root))
+	from frontend.entryPoint import entryPointFunc
 	entryPointFunc()
 
 if __name__ == "__main__":
