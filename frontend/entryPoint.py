@@ -13,5 +13,5 @@ def entryPointFunc():
     planning_handler = PlanningHandler(data_handler.events)
   
   # Create and run calendar with planning handler
-  cal = get_calendar(planning_handler=planning_handler)
+  cal = get_calendar(planning_handler=planning_handler, data_handler=data_handler)
   cal.run()

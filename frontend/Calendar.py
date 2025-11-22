@@ -1,19 +1,38 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from datetime import datetime, timedelta, timezone
 import pickle
 import os
 from config.constants import WINDOW_HEIGHT, WINDOW_WIDTH, BTN_BG_PRIMARY, BTN_BG_TODAY, BTN_BG_CREATE, DAY_LABEL_BG_EVEN, DAY_LABEL_BG_ODD, DataPaths
+from handler.dataHandler import DataHandler
+from handler.planningHandler import PlanningHandler
+from classes.eventTypes import Event
+from classes.ruleTypes import FrequencyRule, ConditionRule, Rule
+from classes.timeUnits import TimeUnit
 try:
-    from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QInputDialog, QMessageBox, QScrollArea, QSizePolicy  # type: ignore[import]
-    from PyQt5.QtCore import QTimer, Qt  # type: ignore[import]
+    from PyQt5.QtWidgets import (
+        QApplication,
+        QWidget,
+        QPushButton,
+        QLabel,
+        QVBoxLayout,
+        QHBoxLayout,
+        QScrollArea,
+        QDialog,
+        QLineEdit,
+        QFormLayout,
+        QDialogButtonBox,
+        QDateEdit,
+        QTimeEdit,
+        QCheckBox,
+        QComboBox,
+        QStackedWidget,
+        QSpinBox,
+        QDoubleSpinBox,
+        QMessageBox,
+    )  # type: ignore[import]
+    from PyQt5.QtCore import QTimer, Qt, QDate, QTime  # type: ignore[import]
 except Exception as exc:
     raise ImportError("PyQt5 is required. Install it with: python -m pip install --user PyQt5") from exc
-
-try:
-    from handler.planningHandler import PlanningHandler, ScheduledEvent
-except ImportError:
-    PlanningHandler = None  # type: ignore[misc,assignment]
-    ScheduledEvent = None  # type: ignore[misc,assignment]
 
 # UTC+1 timezone
 UTC_PLUS_1 = timezone(timedelta(hours=1))
@@ -34,33 +53,214 @@ def _get_monday(date: datetime) -> datetime:
     return date - timedelta(days=date.weekday())
 
 class EventLabel(QLabel):
-    def __init__(self, date: str, idx: int, owner: Any, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, payload: Dict[str, Any], owner: Any, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._date = date
-        self._idx = idx
+        self._payload = payload
         self._owner = owner
-        return
+
     def mousePressEvent(self, ev: Any) -> None:
+        if not self._payload.get('clickable', True):
+            return
         try:
-            self._owner.on_event_click(self._date, self._idx)
+            self._owner.on_event_click(self._payload)
         except Exception:
             pass
 
+
+class EventDialog(QDialog):
+    """Dialog for creating an event with optional scheduling rules."""
+
+    _TIME_UNITS = ["second", "minute", "hour", "day", "week", "month", "year"]
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Create Event")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+        form_layout = QFormLayout()
+
+        self.name_edit = QLineEdit()
+        form_layout.addRow("Name", self.name_edit)
+
+        self.date_edit = QDateEdit()
+        self.date_edit.setCalendarPopup(True)
+        today = _get_today_utc1()
+        self.date_edit.setDate(QDate(today.year, today.month, today.day))
+        self.date_edit.setDisplayFormat("yyyy-MM-dd")
+        form_layout.addRow("Date", self.date_edit)
+
+        self.all_day_checkbox = QCheckBox("All-day event")
+        self.all_day_checkbox.toggled.connect(self._on_all_day_toggled)
+        form_layout.addRow("Duration", self.all_day_checkbox)
+
+        self.start_time_edit = QTimeEdit()
+        self.start_time_edit.setDisplayFormat("HH:mm")
+        self.start_time_edit.setTime(QTime(9, 0))
+        form_layout.addRow("Start", self.start_time_edit)
+
+        self.end_time_edit = QTimeEdit()
+        self.end_time_edit.setDisplayFormat("HH:mm")
+        self.end_time_edit.setTime(QTime(10, 0))
+        form_layout.addRow("End", self.end_time_edit)
+
+        self.iterations_spin = QSpinBox()
+        self.iterations_spin.setMinimum(0)
+        self.iterations_spin.setMaximum(999)
+        self.iterations_spin.setSpecialValueText("Unlimited")
+        form_layout.addRow("Iterations", self.iterations_spin)
+
+        self.time_remaining_spin = QDoubleSpinBox()
+        self.time_remaining_spin.setDecimals(1)
+        self.time_remaining_spin.setSuffix(" h")
+        self.time_remaining_spin.setMinimum(0.0)
+        self.time_remaining_spin.setMaximum(1000.0)
+        self.time_remaining_spin.setSingleStep(0.5)
+        self.time_remaining_spin.setSpecialValueText("Auto")
+        form_layout.addRow("Time Remaining", self.time_remaining_spin)
+
+        layout.addLayout(form_layout)
+
+        rule_header = QLabel("Rule")
+        rule_header.setStyleSheet("font-weight:600; margin-top:8px;")
+        layout.addWidget(rule_header)
+
+        self.rule_combo = QComboBox()
+        self.rule_combo.addItems(["None", "Frequency", "Condition"])
+        self.rule_combo.currentIndexChanged.connect(self._on_rule_changed)
+        layout.addWidget(self.rule_combo)
+
+        self.rule_stack = QStackedWidget()
+        self.rule_stack.addWidget(QWidget())  # None
+        self.rule_stack.addWidget(self._build_frequency_page())
+        self.rule_stack.addWidget(self._build_condition_page())
+        layout.addWidget(self.rule_stack)
+
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)  # type: ignore[attr-defined]
+        self.button_box.accepted.connect(self._on_accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+    def _build_frequency_page(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+
+        self.freq_rate_spin = QDoubleSpinBox()
+        self.freq_rate_spin.setDecimals(2)
+        self.freq_rate_spin.setMinimum(0.1)
+        self.freq_rate_spin.setValue(1.0)
+        layout.addRow("Rate", self.freq_rate_spin)
+
+        self.freq_unit_combo = QComboBox()
+        self.freq_unit_combo.addItems([unit.title() for unit in self._TIME_UNITS])
+        layout.addRow("Unit", self.freq_unit_combo)
+
+        return widget
+
+    def _build_condition_page(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+
+        self.cond_reference_factor = QDoubleSpinBox()
+        self.cond_reference_factor.setDecimals(2)
+        self.cond_reference_factor.setMinimum(0.1)
+        self.cond_reference_factor.setValue(1.0)
+        layout.addRow("Reference Factor", self.cond_reference_factor)
+
+        self.cond_reference_unit = QComboBox()
+        self.cond_reference_unit.addItems([unit.title() for unit in self._TIME_UNITS])
+        layout.addRow("Reference Unit", self.cond_reference_unit)
+
+        self.cond_unit_factor = QDoubleSpinBox()
+        self.cond_unit_factor.setDecimals(2)
+        self.cond_unit_factor.setMinimum(0.1)
+        self.cond_unit_factor.setValue(1.0)
+        layout.addRow("Rule Factor", self.cond_unit_factor)
+
+        self.cond_unit = QComboBox()
+        self.cond_unit.addItems([unit.title() for unit in self._TIME_UNITS])
+        layout.addRow("Rule Unit", self.cond_unit)
+
+        self.cond_index_spin = QSpinBox()
+        self.cond_index_spin.setMinimum(1)
+        self.cond_index_spin.setValue(1)
+        layout.addRow("Occurrence Index", self.cond_index_spin)
+
+        return widget
+
+    def _on_all_day_toggled(self, checked: bool) -> None:
+        self.start_time_edit.setEnabled(not checked)
+        self.end_time_edit.setEnabled(not checked)
+
+    def _on_rule_changed(self, index: int) -> None:
+        self.rule_stack.setCurrentIndex(index)
+
+    def _on_accept(self) -> None:
+        if not self.name_edit.text().strip():
+            QMessageBox.warning(self, "Missing Name", "Please provide an event name.")
+            return
+
+        if not self.all_day_checkbox.isChecked():
+            start = self.start_time_edit.time()
+            end = self.end_time_edit.time()
+            if start >= end:
+                QMessageBox.warning(self, "Invalid Time", "End time must be after start time.")
+                return
+
+        self.accept()
+
+    def get_data(self) -> Dict[str, Any]:
+        date_qt = self.date_edit.date()
+        date_str = date_qt.toString("yyyy-MM-dd")
+        all_day = self.all_day_checkbox.isChecked()
+        start_time = None if all_day else self.start_time_edit.time().toString("HH:mm")
+        end_time = None if all_day else self.end_time_edit.time().toString("HH:mm")
+
+        rule_type = self.rule_combo.currentText().lower()
+        rule_data: Optional[Dict[str, Any]] = None
+        if rule_type == "frequency":
+            rule_data = {
+                "type": "frequency",
+                "rate": float(self.freq_rate_spin.value()),
+                "unit": self._TIME_UNITS[self.freq_unit_combo.currentIndex()],
+            }
+        elif rule_type == "condition":
+            rule_data = {
+                "type": "condition",
+                "reference_factor": float(self.cond_reference_factor.value()),
+                "reference_unit": self._TIME_UNITS[self.cond_reference_unit.currentIndex()],
+                "unit_factor": float(self.cond_unit_factor.value()),
+                "unit": self._TIME_UNITS[self.cond_unit.currentIndex()],
+                "index": int(self.cond_index_spin.value()),
+            }
+
+        return {
+            "name": self.name_edit.text().strip(),
+            "date": date_str,
+            "all_day": all_day,
+            "start_time": start_time,
+            "end_time": end_time,
+            "rule": rule_data,
+            "iterations_remaining": int(self.iterations_spin.value()) or None,
+            "time_remaining": float(self.time_remaining_spin.value()) if self.time_remaining_spin.value() > 0 else None,
+        }
+
 class CalendarApp:
-    def __init__(self, planning_handler: Optional[Any] = None) -> None:
+    def __init__(self, planning_handler: Optional[Any] = None, data_handler: Optional[DataHandler] = None) -> None:
         self.app: Any = QApplication.instance()
         if self.app is None:
             self.app = QApplication([])
         self.window: Any = QWidget()
         self.window.setWindowTitle("ABCoordinator")
         self.window.resize(WINDOW_WIDTH, WINDOW_HEIGHT + 200)
-        
         # Install resize event handler
         self.window.resizeEvent = self._on_window_resize
-        
         self.current_monday: datetime = _get_monday(_get_today_utc1())
         self.events: Dict[str, List[Dict[str, Any]]] = {}
+        self.scheduled_events: Dict[str, List[Dict[str, Any]]] = {}
         self.planning_handler: Optional[Any] = planning_handler
+        self.data_handler: Optional[DataHandler] = data_handler
         root_layout: Any = QVBoxLayout(self.window)
         top_bar: Any = QHBoxLayout()
         root_layout.addLayout(top_bar)
@@ -100,9 +300,7 @@ class CalendarApp:
         spacer_top.setMaximumHeight(ALLDAY_AREA_HEIGHT)
         self._time_spacer = spacer_top
         time_layout.addWidget(spacer_top)
-        # Display hours in UTC+1 (shift by 1 hour)
         for h in range(24):
-            # Convert UTC hour to UTC+1 hour
             utc1_hour = (h + 1) % 24
             tl = QLabel(f"{utc1_hour:02d}:00")
             tl.setStyleSheet("color:#555; padding:6px; font-family:monospace;")
@@ -174,7 +372,6 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
             )
         except Exception:
             pass
-        self.update_week()
         self._left_time_line = QWidget(self.time_widget)
         self._left_time_line.setStyleSheet('background: #E53935; border: none;')
         self._left_time_line.setFixedHeight(2)
@@ -183,13 +380,115 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
         self._timer.timeout.connect(self._update_current_lines)
         self._timer.start(60 * 1000)
         QTimer.singleShot(0, self._update_current_lines)
-        
+
         # Load events from planning handler if provided
         if self.planning_handler is not None:
             self._load_events_from_handler()
-        
+        elif self.data_handler is not None and self.data_handler.events:
+            self._rebuild_schedule(show_error=False)
+
         # Load saved calendar state (user-created events)
         self._load_calendar_state()
+
+        self.update_week()
+
+    @staticmethod
+    def _format_number(value: Any) -> str:
+        try:
+            number = float(value)
+            if number.is_integer():
+                return str(int(number))
+            return f"{number:.2f}".rstrip('0').rstrip('.')
+        except (TypeError, ValueError):
+            return str(value)
+
+    @classmethod
+    def _format_rule_summary(cls, rule: Optional[Dict[str, Any]]) -> str:
+        if not rule:
+            return ""
+        rtype = rule.get("type")
+        if rtype == "frequency":
+            rate = cls._format_number(rule.get("rate", 1))
+            unit = rule.get("unit", "")
+            return f"  · Every {rate} {unit}(s)"
+        if rtype == "condition":
+            ref_factor = cls._format_number(rule.get("reference_factor", 1))
+            ref_unit = rule.get("reference_unit", "")
+            unit_factor = cls._format_number(rule.get("unit_factor", 1))
+            unit = rule.get("unit", "")
+            index = rule.get("index", 1)
+            return (
+                f"  · After {ref_factor} {ref_unit}(s), every {unit_factor} {unit}(s), occurrence {index}"
+            )
+        return ""
+
+    @staticmethod
+    def _serialize_rule(rule: Optional[Rule]) -> Optional[Dict[str, Any]]:
+        if isinstance(rule, FrequencyRule):
+            return {
+                "type": "frequency",
+                "unit": rule.unit,
+                "rate": rule.rate,
+            }
+        if isinstance(rule, ConditionRule):
+            return {
+                "type": "condition",
+                "reference_unit": rule.reference,
+                "reference_factor": rule.referenceFactor,
+                "unit": rule.unit,
+                "unit_factor": rule.unitFactor,
+                "index": rule.index,
+            }
+        return None
+
+    @staticmethod
+    def _build_rule_object(rule_data: Optional[Dict[str, Any]]) -> Optional[Rule]:
+        if not rule_data:
+            return None
+        rtype = rule_data.get("type")
+        if rtype == "frequency":
+            unit = cast(TimeUnit, rule_data.get("unit", "day"))
+            rate = float(rule_data.get("rate", 1.0))
+            return FrequencyRule(unit, rate)
+        if rtype == "condition":
+            reference_unit = cast(TimeUnit, rule_data.get("reference_unit", "day"))
+            reference_factor = float(rule_data.get("reference_factor", 1.0))
+            unit = cast(TimeUnit, rule_data.get("unit", "day"))
+            unit_factor = float(rule_data.get("unit_factor", 1.0))
+            index = int(rule_data.get("index", 1))
+            return ConditionRule(reference_unit, reference_factor, unit, unit_factor, index)
+        return None
+
+    def _build_event_from_dialog(self, event_data: Dict[str, Any]) -> Event:
+        start_time = event_data.get('start_time')
+        end_time = event_data.get('end_time')
+        if start_time is None or end_time is None:
+            raise ValueError("Automatic scheduling requires a start and end time.")
+
+        try:
+            start_dt = datetime.strptime(f"{event_data['date']} {start_time}", "%Y-%m-%d %H:%M")
+            end_dt = datetime.strptime(f"{event_data['date']} {end_time}", "%Y-%m-%d %H:%M")
+        except ValueError as exc:
+            raise ValueError("Could not parse start/end times.") from exc
+
+        duration = end_dt - start_dt
+        if duration.total_seconds() <= 0:
+            raise ValueError("End time must be after start time for scheduling.")
+
+        rule_obj = self._build_rule_object(event_data.get('rule'))
+        time_remaining = event_data.get('time_remaining')
+        if time_remaining is None or time_remaining <= 0:
+            time_remaining = duration.total_seconds() / 3600.0
+        iterations_remaining = event_data.get('iterations_remaining')
+
+        return Event(
+            name=event_data['name'],
+            startDate=start_dt,
+            duration=duration,
+            rule=rule_obj,
+            timeRemaining=time_remaining,
+            iterationsRemaining=iterations_remaining,
+        )
 
     def _on_window_resize(self, event: Any) -> None:
         """Handle window resize events."""
@@ -211,37 +510,46 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
 
     def _load_events_from_handler(self) -> None:
         """Load scheduled events from the planning handler into the calendar."""
+        self.scheduled_events = {}
         if self.planning_handler is None:
             return
-        
+
         for date_key, scheduled_events in self.planning_handler.scheduledDays.items():
             date_str = date_key.strftime("%Y-%m-%d")
             for scheduled in scheduled_events:
                 event = scheduled.event
-                # Convert scheduled time to UTC+1 if needed
                 scheduled_time = scheduled.scheduledTime
                 end_time = scheduled.endTime
-                
-                # If the times don't have timezone info, they might be in UTC
-                # Convert them to UTC+1 by adding 1 hour
                 if scheduled_time.tzinfo is None:
-                    # Check if we need to adjust - compare with current UTC+1 time
-                    # If the scheduled time seems to be in UTC, add 1 hour
                     scheduled_time = scheduled_time + timedelta(hours=1)
                     end_time = end_time + timedelta(hours=1)
-                
                 start_time_str = scheduled_time.strftime("%H:%M")
                 end_time_str = end_time.strftime("%H:%M")
-                
                 ev_dict: Dict[str, Any] = {
                     'name': event.name,
                     'time': start_time_str,
                     'end_time': end_time_str,
-                    'all_day': False
+                    'all_day': False,
+                    'rule': self._serialize_rule(event.rule),
+                    'source': 'scheduled',
+                    'clickable': False,
+                    'date': date_str,
                 }
-                
-                self.events.setdefault(date_str, []).append(ev_dict)
-    
+                self.scheduled_events.setdefault(date_str, []).append(ev_dict)
+
+    def _rebuild_schedule(self, show_error: bool = True) -> bool:
+        if self.data_handler is None:
+            return False
+        try:
+            self.planning_handler = PlanningHandler(self.data_handler.events)
+        except Exception as exc:
+            if show_error:
+                QMessageBox.critical(self.window, "Scheduling Failed", f"{exc}")
+            else:
+                print(f"Warning: could not rebuild schedule: {exc}")
+            return False
+        self._load_events_from_handler()
+        return True
     def _load_calendar_state(self) -> None:
         """Load saved calendar state from pickle file."""
         try:
@@ -250,13 +558,19 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                     saved_events = pickle.load(f)
                     # Merge saved events with existing events
                     for date_str, event_list in saved_events.items():
-                        if date_str not in self.events:
-                            self.events[date_str] = event_list
-                        else:
-                            # Add saved events that aren't already in the list
-                            for saved_ev in event_list:
-                                if saved_ev not in self.events[date_str]:
-                                    self.events[date_str].append(saved_ev)
+                        normalized: List[Dict[str, Any]] = []
+                        for saved_ev in event_list:
+                            if not isinstance(saved_ev, dict):
+                                continue
+                            saved_dict: Dict[str, Any] = dict(cast(Dict[str, Any], saved_ev))
+                            saved_dict.setdefault('source', 'manual')
+                            saved_dict.setdefault('clickable', True)
+                            saved_dict.setdefault('date', date_str)
+                            normalized.append(saved_dict)
+                        target = self.events.setdefault(date_str, [])
+                        for saved_ev in normalized:
+                            if saved_ev not in target:
+                                target.append(saved_ev)
         except Exception as e:
             print(f"Warning: Could not load calendar state: {e}")
     
@@ -268,6 +582,22 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                 pickle.dump(self.events, f)
         except Exception as e:
             print(f"Warning: Could not save calendar state: {e}")
+
+    def _store_manual_event(self, event_data: Dict[str, Any]) -> None:
+        date_key = event_data['date']
+        record: Dict[str, Any] = {
+            'name': event_data['name'],
+            'time': event_data['start_time'],
+            'end_time': event_data['end_time'],
+            'all_day': event_data['all_day'],
+            'rule': event_data.get('rule'),
+            'source': 'manual',
+            'clickable': True,
+            'date': date_key,
+        }
+        self.events.setdefault(date_key, []).append(record)
+        self._save_calendar_state()
+        self.update_week()
     
     def _week_range_text(self) -> str:
         start = self.current_monday
@@ -289,11 +619,13 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
             all_layout.addWidget(date_lbl)
             allday_lbl = QLabel('<b>All-day</b>')
             all_layout.addWidget(allday_lbl)
-            events = self.events.get(date, [])
-            allday_events = [e for e in events if e.get('all_day')]
+            manual_events = self.events.get(date, [])
+            scheduled_events = self.scheduled_events.get(date, [])
+            allday_events = [e for e in manual_events if e.get('all_day')]
             if allday_events:
                 for ev in allday_events:
-                    lbl = QLabel(f"• {ev.get('name')}")
+                    summary = self._format_rule_summary(ev.get('rule'))
+                    lbl = QLabel(f"• {ev.get('name')}{summary}")
                     lbl.setStyleSheet('font-weight:600;')
                     all_layout.addWidget(lbl)
             else:
@@ -305,8 +637,9 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                 if child.objectName() == 'current_line':
                     continue
                 child.setParent(None)
-            timed_events = [e for e in events if not e.get('all_day')]
-            if timed_events:
+            manual_timed = [e for e in manual_events if not e.get('all_day')]
+            combined_events = scheduled_events + manual_timed
+            if combined_events:
                 def _time_key(ev: Dict[str, Any]) -> int:
                     t = ev.get('time') or '00:00'
                     try:
@@ -314,13 +647,12 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                         return hh*60 + mm
                     except Exception:
                         return 0
-                # sort the original events list indices by start time
-                indexed = [(idx, e) for idx, e in enumerate(events) if not e.get('all_day')]
-                indexed.sort(key=lambda ie: _time_key(ie[1]))
-                for ev_idx, ev in indexed:
+                combined_events.sort(key=_time_key)
+                for ev in combined_events:
                     start = ev.get('time') or '00:00'
                     end = ev.get('end_time') or start
                     name = ev.get('name')
+                    summary = self._format_rule_summary(ev.get('rule'))
                     try:
                         sh, sm = map(int, start.split(':'))
                         eh, em = map(int, end.split(':'))
@@ -333,8 +665,14 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                         end_min = start_min + 30
                     y = int((start_min / 60.0) * self.HOUR_HEIGHT)
                     height_px = max(18, int(((end_min - start_min) / 60.0) * self.HOUR_HEIGHT))
-                    ev_widget = EventLabel(date, ev_idx, self, timeline_widget)
-                    ev_widget.setText(f"{start} — {end}  {name}")
+                    payload: Dict[str, Any] = {
+                        'date': date,
+                        'event': ev,
+                        'source': ev.get('source', 'manual'),
+                        'clickable': ev.get('source', 'manual') == 'manual',
+                    }
+                    ev_widget = EventLabel(payload, self, timeline_widget)
+                    ev_widget.setText(f"{start} — {end}  {name}{summary}")
                     ev_widget.setStyleSheet("background: rgba(66,133,244,0.12); border-left: 4px solid rgba(66,133,244,0.28); border-radius:6px; padding:6px; color:#111;")
                     ev_widget.setWordWrap(True)
                     ev_widget.setGeometry(4, y, max(80, timeline_widget.width() - 8), height_px)
@@ -359,59 +697,41 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
         self.current_monday = _get_monday(_get_today_utc1())
         self.update_week()
     def create_event(self) -> None:
-        default_date = _get_today_utc1().strftime("%Y-%m-%d")
-        date_str, ok = QInputDialog.getText(self.window, "Event Date", "Enter date (YYYY-MM-DD):", text=default_date)  # type: ignore[arg-type]
-        if not ok or not date_str:
+        dialog = EventDialog(self.window)
+        if dialog.exec_() != QDialog.Accepted:  # type: ignore[attr-defined]
             return
-        date_str = date_str.strip()
+
+        event_data = dialog.get_data()
+        if event_data['all_day'] or self.data_handler is None:
+            self._store_manual_event(event_data)
+            return
+
         try:
-            datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            QMessageBox.warning(self.window, "Error", "Invalid date format")  # type: ignore[arg-type]
+            event_obj = self._build_event_from_dialog(event_data)
+        except ValueError as exc:
+            QMessageBox.warning(self.window, "Invalid Event", str(exc))
+            self._store_manual_event(event_data)
             return
 
-        choice, ok_choice = QInputDialog.getItem(self.window, "All-day?", "Is this an all-day event?", ["No", "Yes"], 0, False)  # type: ignore[arg-type]
-        if not ok_choice:
+        self.data_handler.events.append(event_obj)
+        try:
+            self.data_handler.saveData()
+        except Exception as exc:
+            self.data_handler.events.pop()
+            QMessageBox.critical(self.window, "Save Failed", f"Could not store event: {exc}")
             return
-        is_all = (choice == "Yes")
 
-        time_val: Optional[str] = None
-        end_time: Optional[str] = None
-        if not is_all:
-            time_val, ok_time = QInputDialog.getText(self.window, "Start Time", "Enter start time (HH:MM, 24h):", text="09:00")  # type: ignore[arg-type]
-            if not ok_time or not time_val:
-                return
-            time_val = time_val.strip()
+        rebuilt = self._rebuild_schedule(show_error=True)
+        if not rebuilt:
+            # Roll back persisted event if scheduling failed
             try:
-                datetime.strptime(time_val, "%H:%M")
-            except ValueError:
-                QMessageBox.warning(self.window, "Error", "Invalid time format; use HH:MM (24h)")  # type: ignore[arg-type]
-                return
-            end_time, ok_end = QInputDialog.getText(self.window, "End Time", "Enter end time (HH:MM, 24h):", text="10:00")  # type: ignore[arg-type]
-            if not ok_end or not end_time:
-                return
-            end_time = end_time.strip()
-            try:
-                datetime.strptime(end_time, "%H:%M")
-            except ValueError:
-                QMessageBox.warning(self.window, "Error", "Invalid time format; use HH:MM (24h)")  # type: ignore[arg-type]
-                return
-            try:
-                sh, sm = map(int, time_val.split(':'))
-                eh, em = map(int, end_time.split(':'))
-                if eh*60 + em <= sh*60 + sm:
-                    QMessageBox.warning(self.window, "Error", "End time must be after start time")  # type: ignore[arg-type]
-                    return
+                self.data_handler.events.remove(event_obj)
+                self.data_handler.saveData()
             except Exception:
                 pass
-
-        name, ok_name = QInputDialog.getText(self.window, "Event Name", "Enter event name:")  # type: ignore[arg-type]
-        if not ok_name or not name:
+            self._store_manual_event(event_data)
             return
 
-        ev: Dict[str, Any] = {'name': name.strip(), 'time': time_val, 'end_time': end_time, 'all_day': is_all}
-        self.events.setdefault(date_str, []).append(ev)
-        self._save_calendar_state()
         self.update_week()
 
     def _update_current_lines(self) -> None:
@@ -449,16 +769,28 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
                  # Hide line for other days
                  line.hide()
     
-    def on_event_click(self, date: str, ev_idx: int) -> None:
+    def on_event_click(self, payload: Dict[str, Any]) -> None:
+        if payload.get('source') != 'manual':
+            return
+        date = payload.get('date')
+        event_ref = payload.get('event')
+        if not date or event_ref is None:
+            return
+
         evs = self.events.get(date, [])
-        if ev_idx < 0 or ev_idx >= len(evs):
+        if event_ref not in evs:
             return
-        ev = evs[ev_idx]
-        choice, ok = QInputDialog.getItem(self.window, "Delete?", f"Delete event: {ev.get('name')}?", ["No", "Yes"], 0, False)  # type: ignore[arg-type]
-        if not ok or choice != "Yes":
+
+        response = QMessageBox.question(
+            self.window,
+            "Delete Event",
+            f"Delete event: {event_ref.get('name')}?",
+        )
+        if response != QMessageBox.StandardButton.Yes:
             return
+
         try:
-            evs.pop(ev_idx)
+            evs.remove(event_ref)
             if not evs:
                 self.events.pop(date, None)
         except Exception:
@@ -474,13 +806,14 @@ QPushButton#create {{ background: {BTN_BG_CREATE}; }}
         return result
 
 
-def get_calendar(planning_handler: Optional[Any] = None) -> CalendarApp:
+def get_calendar(planning_handler: Optional[Any] = None, data_handler: Optional[DataHandler] = None) -> CalendarApp:
     """Create and return a CalendarApp instance.
 
     Args:
         planning_handler: Optional PlanningHandler instance to load events from
+        data_handler: Optional DataHandler used for persisting new events
 
     Returns:
         CalendarApp instance
     """
-    return CalendarApp(planning_handler=planning_handler)
+    return CalendarApp(planning_handler=planning_handler, data_handler=data_handler)
